@@ -8,9 +8,17 @@ import os
 import arrow
 import atexit
 
+from contextlib import contextmanager
+
+from werkzeug.contrib.fixers import ProxyFix
+
 
 # Init app
 app = Flask(__name__)
+
+# A fix for the Flask reverse proxy problem
+app.wsgi_app = ProxyFix(app.wsgi_app)
+
 # Add a blueprint to move the api end point
 blueprint = Blueprint('api', __name__, url_prefix='/api')
 # move the documentation end point as well
@@ -31,6 +39,20 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 # Init Marshmallow
 ma = Marshmallow(app)
+
+# Context manager for handling session transactions
+@contextmanager
+def dbsession():
+    """Provide a transactional scope around a series of operations."""
+    session = db.session
+    try:
+        yield session
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 # Game server database table definition
 class Server(db.Model):
@@ -63,11 +85,17 @@ api.add_namespace(servers_api)
 server_schema = ServerSchema(strict=True)
 servers_schema = ServerSchema(many=True, strict=True)
 
+# Server model for Swagger UI documentation
 api_server_model = api.model('Server',
                     {
-                        'game_id' : fields.Integer('Game id.'),
                         'name' : fields.String('Server name.'),
+                        'game_id' : fields.Integer('Hosted game ID.'),
+                        'ip' : fields.String('Server ip.'),
                         'port' : fields.Integer('Server port.'),
+                        'game_mode' : fields.String('Map game mode.'),
+                        'map' : fields.String('Runnign map.'),
+                        'current_players' : fields.Integer('Current number of players on server.'),
+                        'max_players' : fields.Integer('Maximum number of players on server.'),
                     })
 
 
@@ -76,6 +104,7 @@ api_server_model = api.model('Server',
 class ServersList(Resource):
 
     @servers_api.response(200, 'Get a list of all servers')
+    #@api.expect(api_server_model)
     def get(self):
         servers = Server.query.all()
         return servers_schema.jsonify(servers)
@@ -83,13 +112,12 @@ class ServersList(Resource):
     @servers_api.response(201, 'Server already present, updated the server info.')
     @servers_api.response(201, 'Added server to server list')
     @servers_api.response(400, 'Bad Request')
-    #@api.expect(api_server_model)
+    @api.expect(api_server_model)
     def post(self):
         # Create the url form the server ip and the dedicated server port
         api.payload['url'] = '{}:{}'.format(request.remote_addr, api.payload['port'])
         # validate the data
         new_server = server_schema.load(api.payload)
-
 
         new_Server_row = Server.query.get(new_server.data['url'])
         # if the server already exists, update all its info and set it to active
@@ -113,10 +141,11 @@ class ServersList(Resource):
 
 @servers_api.route('/latest')
 class ServerLatest(Resource):
-
+    
     @servers_api.response(200, 'The latest registered active server')
     @servers_api.response(404, 'No active server found')
     def get(self):
+        
         # Get the latest registered active server
         server = Server.query.filter_by(active=True).order_by(Server.registration_time.desc()).first_or_404()
         return server_schema.jsonify(server)
@@ -140,28 +169,36 @@ class ServerByID(Resource):
             db.session.commit()
             return 200
         except:
+            db.session.rollback()
             return 404
 
 
 
 # TODO: Move to a config file
-server_inactive_time = 1.0
+# 3 seconds seems about right, anything less causes tasks to get called while the previous ones were running
+server_inactive_time = 3.0
 # sets the server that haven't checked in a while inactive
 def set_server_inactive():
     # Query for all the servers that haven't checked-in in more than 'server_inactive_time'
     # Then update all of them to be inactive, only activated by resgtering or checking-in again
     last_active_time = arrow.now().shift(seconds=-server_inactive_time)
-    Server.query.\
-       filter(Server.registration_time < last_active_time).\
-       update(dict(active=False))
-    db.session.commit()
+
+    # All commits seem to require a try and catch to rollback, maybe need a context manager?
+    try:
+        Server.query.\
+            filter(Server.registration_time < last_active_time).\
+             update(dict(active=False))
+        db.session.commit()
+    except:
+        db.session.rollback()
 
 # TODO: Move this to seperate class
-# Background task to deactivate the servers which missed their check-in
-scheduler = BackgroundScheduler()
+# Background task to deactivate the servers which missed their check-in.
+# Not having the timezone specified gives an error on some docker images and hosting services.
+scheduler = BackgroundScheduler({'apscheduler.timezone': 'UTC'})
 scheduler.add_job(set_server_inactive, 'interval', seconds=server_inactive_time)
 scheduler.start()
-# Shutdown the scheduler when this process exits
+# Shutdown the scheduler when this process exits.
 atexit.register(lambda: scheduler.shutdown(wait=False))
 
 # Run server
@@ -171,5 +208,6 @@ if __name__ == '__main__':
     if not os.path.isfile(database_path):
         db.create_all()
 
-    app.run(debug=True)
+    app.debug = True
+    app.run(host='0.0.0.0')
     
