@@ -1,5 +1,5 @@
 from flask import Flask, Blueprint, request
-from flask_restplus import Resource, Api, Namespace, fields
+from flask_restplus import Resource, Api, Namespace, fields, reqparse
 from flask_sqlalchemy import SQLAlchemy
 import sqlalchemy_utils
 from flask_marshmallow import Marshmallow
@@ -10,15 +10,13 @@ import atexit
 
 from contextlib import contextmanager
 
-from werkzeug.contrib.fixers import ProxyFix
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 # Init app
 app = Flask(__name__)
-
 # A fix for the Flask reverse proxy problem
 app.wsgi_app = ProxyFix(app.wsgi_app)
-
 # Add a blueprint to move the api end point
 blueprint = Blueprint('api', __name__, url_prefix='/api')
 # move the documentation end point as well
@@ -98,13 +96,19 @@ api_server_model = api.model('Server',
                         'max_players' : fields.Integer('Maximum number of players on server.'),
                     })
 
-
+# Parser for handling get requests
+server_request_parser = reqparse.RequestParser()
+server_request_parser.add_argument('game_id', type=int, required=False)
+server_request_parser.add_argument('game_mode', type=str, required=False)
+server_request_parser.add_argument('map', type=str, required=False)
+server_request_parser.add_argument('current_players', type=int, required=False)
+server_request_parser.add_argument('max_players', type=int, required=False)
 
 @servers_api.route('/')
 class ServersList(Resource):
 
     @servers_api.response(200, 'Get a list of all servers')
-    #@api.expect(api_server_model)
+    @api.expect(server_request_parser, validate=True)
     def get(self):
         servers = Server.query.all()
         return servers_schema.jsonify(servers)
@@ -116,8 +120,13 @@ class ServersList(Resource):
     def post(self):
         # Create the url form the server ip and the dedicated server port
         api.payload['url'] = '{}:{}'.format(request.remote_addr, api.payload['port'])
+
         # validate the data
-        new_server = server_schema.load(api.payload)
+        try:
+            new_server = server_schema.load(api.payload)
+        except:
+            return {'result' : 'Fail'}, 400
+        
 
         new_Server_row = Server.query.get(new_server.data['url'])
         # if the server already exists, update all its info and set it to active
@@ -164,13 +173,11 @@ class ServerByID(Resource):
     def put(self, server_url):
         print(api.request.remote_addr)
 
-        try:
+        with dbsession():
             db.session.add(Server(url=server_url))
-            db.session.commit()
-            return 200
-        except:
-            db.session.rollback()
-            return 404
+            return {'result' : 'Success'}, 200
+        #except:
+        return {'result' : 'Success'}, 404
 
 
 
@@ -184,13 +191,10 @@ def set_server_inactive():
     last_active_time = arrow.now().shift(seconds=-server_inactive_time)
 
     # All commits seem to require a try and catch to rollback, maybe need a context manager?
-    try:
+    with dbsession():
         Server.query.\
             filter(Server.registration_time < last_active_time).\
              update(dict(active=False))
-        db.session.commit()
-    except:
-        db.session.rollback()
 
 # TODO: Move this to seperate class
 # Background task to deactivate the servers which missed their check-in.
