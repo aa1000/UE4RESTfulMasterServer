@@ -242,20 +242,27 @@ class ServersList(Resource):
         """
         # Create the url form the server ip and the dedicated server port
         # The client address if the address of the http client if one is not provided
-        client_addr = api.payload['ip'] if 'ip' in api.payload and api.payload['ip'] else request.remote_addr
+        client_addr = request.remote_addr
+        if 'ip' in api.payload:
+            client_addr = api.payload['ip']
+        else:
+            api.payload['ip'] = request.remote_addr
+        #client_addr = api.payload['ip'] if 'ip' in api.payload and api.payload['ip'] else request.remote_addr
         api.payload['url'] = '{}:{}'.format(client_addr, api.payload['port'])
 
         
         # validate and deserialize the data
         new_server = ServerSchema().load(api.payload)
 
-        new_Server_row = Server.query.get(new_server.data.url)
+        new_server_row = Server.query.get(new_server.data.url)
+
+        print(get_model_dict(new_server.data))
         # If the server already exists, update all its info and set it to active
         # A server is defined only by its url so the game mode or map could change at any time
-        if new_Server_row:
-            new_Server_row.active = True
-            new_Server_row.registration_time = arrow.now()
+        if new_server_row:
             with dbsession():
+                new_server_row.active = True
+                new_server_row.registration_time = arrow.now()
                 Server.query.filter_by(url=new_server.data.url).update(get_model_dict(new_server.data))
             return {'message' : 'Server info updated'}, 200
         # If this is the first time the server is registering with us,
@@ -312,11 +319,22 @@ class ServerByURL(Resource):
 
         <h3>Update the info of the server matching the url</h3>
         """
-        ServersList.post
-        """
-        # validate the data # validate and deserialize the data
+        # validate and deserialize the data
         new_server_info = ServerSchema().load(api.payload)
 
+
+        server_row = Server.query.get(server_url)
+        # If the server already exists, update all its info and set it to active
+        # A server is defined only by its url so the game mode or map could change at any time
+        if new_Server_row:
+            with dbsession():
+                new_server_row.active = True
+                new_server_row.registration_time = arrow.now()
+                Server.query.filter_by(url=server_url).update(get_model_dict(new_server.data))
+            return {'message' : 'Server info updated'}, 200
+        # If the server is not registered before then return an 404
+        else:
+            return {'error' : "Server doesn't exist"}, 404
         
         try:
             with dbsession():
@@ -324,7 +342,7 @@ class ServerByURL(Resource):
             return {'result' : 'Success'}, 200
         except:
             return {'result' : 'Success'}, 404
-        """
+        
 
 
 
