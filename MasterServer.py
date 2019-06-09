@@ -10,11 +10,15 @@ import os
 import arrow
 import atexit
 
+from flask_heroku import Heroku
+
 
 # Init flask app
 app = Flask(__name__)
 # A fix for the Flask reverse proxy problem
 app.wsgi_app = ProxyFix(app.wsgi_app)
+# Init the heroku config
+heroku = Heroku(app)
 # Add a blueprint to move the api end point
 blueprint = Blueprint('api', __name__, url_prefix='/api')
 # move the documentation end point as well
@@ -22,13 +26,8 @@ api = Api(blueprint, doc='/docs')
 # register the blueprint in the app
 app.register_blueprint(blueprint)
 
-# Get the path for the root (current) directory
-basedir = os.path.abspath(os.path.dirname(__file__))
-# Get the path for the database
-database_path = os.path.join(basedir, 'Database/GameServers.db')
-
 # Database
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + database_path
+# No need for a database path the heroku config already pulls the postgresql database uri from enviroment variables
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Init SQLAlchemy DB
@@ -322,26 +321,18 @@ class ServerByURL(Resource):
         # validate and deserialize the data
         new_server_info = ServerSchema().load(api.payload)
 
-
         server_row = Server.query.get(server_url)
         # If the server already exists, update all its info and set it to active
         # A server is defined only by its url so the game mode or map could change at any time
-        if new_Server_row:
+        if server_row:
             with dbsession():
-                new_server_row.active = True
-                new_server_row.registration_time = arrow.now()
-                Server.query.filter_by(url=server_url).update(get_model_dict(new_server.data))
+                server_row.active = True
+                server_row.registration_time = arrow.now()
+                Server.query.filter_by(url=server_url).update(get_model_dict(new_server_info.data))
             return {'message' : 'Server info updated'}, 200
         # If the server is not registered before then return an 404
         else:
             return {'error' : "Server doesn't exist"}, 404
-        
-        try:
-            with dbsession():
-                db.session.add(Server(url=server_url))
-            return {'result' : 'Success'}, 200
-        except:
-            return {'result' : 'Success'}, 404
         
 
 
@@ -374,10 +365,6 @@ atexit.register(lambda: scheduler.shutdown(wait=False))
 # Run server
 if __name__ == '__main__':
 
-    # Create the database if it doesn't exist
-    if not os.path.isfile(database_path):
-        db.create_all()
-
-    app.debug = True
+    #app.debug = True
     app.run(host='0.0.0.0')
     

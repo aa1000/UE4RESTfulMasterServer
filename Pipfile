@@ -14,6 +14,9 @@ sqlalchemy-utils = "*"
 arrow = "*"
 flask-restplus = "*"
 apscheduler = "*"
+gunicorn = "*"
+psycopg2 = "*"
+flask-heroku = "*"
 
 [requires]
 python_version = "3.7"
