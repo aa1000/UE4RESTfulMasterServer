@@ -199,7 +199,6 @@ def get_model_dict(model):
     return dict((column.name, getattr(model, column.name)) 
                 for column in model.__table__.columns)
 
-#def handle_server_register(payload):
 
 @servers_api.route('/')
 class ServersList(Resource):
@@ -231,7 +230,7 @@ class ServersList(Resource):
             return {'message' : 'No servers found'}, 404
 
     @servers_api.response(201, 'Server registered in server list')
-    @servers_api.response(202, 'Server already present, server info updated')
+    @servers_api.response(200, 'Server already present, server info updated')
     @servers_api.response(400, 'Bad Request')
     @servers_api.expect(api_server_model, validate=True)
     def post(self):
@@ -255,8 +254,6 @@ class ServersList(Resource):
         new_server = ServerSchema().load(api.payload)
 
         new_server_row = Server.query.get(new_server.data.url)
-
-        print(get_model_dict(new_server.data))
         # If the server already exists, update all its info and set it to active
         # A server is defined only by its url so the game mode or map could change at any time
         if new_server_row:
@@ -285,7 +282,6 @@ class ServerLatest(Resource):
 
         <h3>Get a list of the last checked-in (active) servers that matching a query</h3>
         """
-        print(request.headers)
         query_args = server_request_parser.parse_args()
         # Force only active servers when getting the latest server
         query_args['active'] = True
@@ -298,7 +294,7 @@ class ServerLatest(Resource):
 @servers_api.route('/<string:server_url>')
 class ServerByURL(Resource):
 
-    @servers_api.response(200, 'The server info')
+    @servers_api.response(200, 'The server info', api_server_model)
     @servers_api.response(404, 'Found no servers with this URL')
     def get(self, server_url):
         """
@@ -307,7 +303,7 @@ class ServerByURL(Resource):
         <h3>Get the info of the server matching the URL</h3>
         """
         server = Server.query.get_or_404(server_url)
-        return ServerSchema.jsonify(server)
+        return ServerSchema().jsonify(server)
 
     # server check in
     @servers_api.response(200, 'Server info updated')
@@ -342,8 +338,6 @@ class ServerByURL(Resource):
             return {'result' : 'Success'}, 200
         except:
             return {'result' : 'Success'}, 404
-        
-
 
 
 # TODO: Move to a config file
@@ -358,7 +352,7 @@ def set_server_inactive():
 
     with dbsession():
         Server.query.\
-            filter(Server.registration_time < last_active_time).\
+            filter(Server.registration_time < last_active_time, Server.active == True).\
             update(dict(active=False))
 
 
@@ -370,6 +364,154 @@ scheduler.add_job(set_server_inactive, 'interval', seconds=server_inactive_time)
 scheduler.start()
 # Shutdown the scheduler when this process exits.
 atexit.register(lambda: scheduler.shutdown(wait=False))
+
+
+
+# User API
+
+# "servers" resource RESTful API endpoint definitions
+users_api = Namespace('users')
+api.add_namespace(users_api)
+
+
+# Game server database table definition
+class User(db.Model):
+    name = db.Column(db.String)
+    username = db.Column(db.String)
+    email = db.Column(sqlalchemy_utils.EmailType)
+    user_id = db.Column(db.Integer, primary_key=True)
+    password = db.Column(db.String)
+
+    def args2query(query_args):
+        # Get the values from args and construct a query based on them
+        name = query_args['name']
+        username = query_args['username']
+        email = query_args['email']
+        user_id = query_args['user_id']
+        password = query_args['password']
+
+        query = User.query
+
+        if name:
+            query = query.filter(User.name == name)
+        
+        if username:
+            query = query.filter(User.username == username)
+
+        if email:
+            query = query.filter(User.email == email)
+        
+        if user_id:
+            query = query.filter(User.user_id == user_id)
+
+        if password:
+            query = query.filter(User.password == password)
+
+        return query
+
+
+# Serialization/Deserialization schema definition
+class UserSchema(ma.ModelSchema):
+    strict = True
+    class Meta:
+        model = User 
+
+
+
+# You can remove this if you don't care about the auto-generated docs
+api_user_model = api.model('User',
+                    {
+                        'name' : fields.String(
+                                    description='The real name of the user',
+                                    example='John Doe'),
+
+                        'username' : fields.String(
+                                    description='The name of the user account login',
+                                    example="JohnDoe2"),
+
+                        'email' : fields.String(
+                                    description='The email of the user',
+                                    example='user@example.com'),
+
+                        'user_id' : fields.Integer(
+                                    description='The id of the user in the database',
+                                    example=1),
+
+                        'password' : fields.String(
+                                    description='The user login password',
+                                    example='Pa$$w0rd_123')
+                    }
+                )
+
+
+
+@users_api.route('/')
+class UsersList(Resource):
+
+    @users_api.response(200, 'A list of all users', [api_user_model])
+    @users_api.response(404, 'Found no users')
+    #@users_api.expect(server_request_parser, validate=True)
+    def get(self):
+        """
+        Query users
+
+        <h3>Get a list of all users that match a certain query</h3>
+        """
+        #query_args = user_request_parser.parse_args()
+        # Only the model specific args are processed in the model
+        #query = User.args2query(query_args)
+        
+        # Execute the query
+        #users = query.all()
+        users = User.query.all()
+        data = UserSchema(many=True).dump(users).data
+        if users:
+            return data, 200
+        else:
+            return {'message' : 'No users found'}, 404
+
+    @users_api.response(201, 'User registered successfully')
+    @users_api.response(200, 'User already present, user info updated')
+    @users_api.response(400, 'Bad Request')
+    @users_api.expect(api_user_model, validate=True)
+    def post(self):
+        """
+        Register user
+
+        <h3>register a user into the database</h3>
+        """
+        # validate and deserialize the data
+        new_user = UserSchema().load(users_api.payload)
+
+        new_user_row = User.query.get(new_user.data.user_id)
+        # If the user already exists, update all their info
+        # A user is defined only by their user_id so the rest could change at any time
+        if new_user_row:
+            with dbsession():
+                User.query.filter_by(user_id=new_user.data.user_id).update(get_model_dict(new_user.data))
+            return {'message' : 'User info updated'}, 200
+        # If this is the first time the user is registering with us,
+        # then create a new entry for them in the database
+        else:
+            with dbsession():
+                db.session.add(new_user.data)
+            return {'message' : 'User Registered'}, 201
+
+
+@users_api.route('/<int:user_id>')
+class ServerByID(Resource):
+
+    @users_api.response(200, 'The user info', api_user_model)
+    @users_api.response(404, 'Found no user with this user_id')
+    def get(self, user_id):
+        """
+        Request the info of a user
+
+        <h3>Get the info of the user matching the user_id</h3>
+        """
+        user = User.query.get_or_404(user_id)
+        return UserSchema().jsonify(user)
+
 
 # Run server
 if __name__ == '__main__':
