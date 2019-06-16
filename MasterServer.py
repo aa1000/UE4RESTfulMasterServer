@@ -369,17 +369,17 @@ atexit.register(lambda: scheduler.shutdown(wait=False))
 
 # User API
 
-# "servers" resource RESTful API endpoint definitions
+# "users" resource RESTful API endpoint definitions
 users_api = Namespace('users')
 api.add_namespace(users_api)
 
 
-# Game server database table definition
+# User database table definition
 class User(db.Model):
     name = db.Column(db.String)
-    username = db.Column(db.String)
+    username = db.Column(db.String, unique=True)
     email = db.Column(sqlalchemy_utils.EmailType)
-    user_id = db.Column(db.Integer, primary_key=True)
+    id = db.Column(db.Integer, primary_key=True)
     password = db.Column(db.String)
 
     def args2query(query_args):
@@ -387,7 +387,7 @@ class User(db.Model):
         name = query_args['name']
         username = query_args['username']
         email = query_args['email']
-        user_id = query_args['user_id']
+        id = query_args['id']
         password = query_args['password']
 
         query = User.query
@@ -401,8 +401,8 @@ class User(db.Model):
         if email:
             query = query.filter(User.email == email)
         
-        if user_id:
-            query = query.filter(User.user_id == user_id)
+        if id:
+            query = query.filter(User.id == id)
 
         if password:
             query = query.filter(User.password == password)
@@ -433,7 +433,7 @@ api_user_model = api.model('User',
                                     description='The email of the user',
                                     example='user@example.com'),
 
-                        'user_id' : fields.Integer(
+                        'id' : fields.Integer(
                                     description='The id of the user in the database',
                                     example=1),
 
@@ -483,12 +483,12 @@ class UsersList(Resource):
         # validate and deserialize the data
         new_user = UserSchema().load(users_api.payload)
 
-        new_user_row = User.query.get(new_user.data.user_id)
+        new_user_row = User.query.get(new_user.data.id)
         # If the user already exists, update all their info
         # A user is defined only by their user_id so the rest could change at any time
         if new_user_row:
             with dbsession():
-                User.query.filter_by(user_id=new_user.data.user_id).update(get_model_dict(new_user.data))
+                User.query.filter_by(user_id=new_user.data.id).update(get_model_dict(new_user.data))
             return {'message' : 'User info updated'}, 200
         # If this is the first time the user is registering with us,
         # then create a new entry for them in the database
@@ -498,20 +498,205 @@ class UsersList(Resource):
             return {'message' : 'User Registered'}, 201
 
 
-@users_api.route('/<int:user_id>')
-class ServerByID(Resource):
+@users_api.route('/<int:id>')
+class UserByID(Resource):
 
     @users_api.response(200, 'The user info', api_user_model)
-    @users_api.response(404, 'Found no user with this user_id')
-    def get(self, user_id):
+    @users_api.response(404, 'Found no user with this user id')
+    def get(self, id):
         """
         Request the info of a user
 
-        <h3>Get the info of the user matching the user_id</h3>
+        <h3>Get the info of the user matching the user id</h3>
         """
-        user = User.query.get_or_404(user_id)
+        user = User.query.get_or_404(id)
         return UserSchema().jsonify(user)
 
+    @users_api.response(200, 'The user was deleted successfully', api_user_model)
+    @users_api.response(404, 'Found no user with this user_id')
+    def delete(self, id):
+        """
+        Request the deletion of a user
+
+        <h3>delete the user matching the user id</h3>
+        """
+        user = User.query.get(id)
+        if user:
+            data = UserSchema().dump(user).data
+            with dbsession():
+                db.session.delete(user)
+            return data, 200
+        else:
+            return {'message' : 'No such user'}, 404
+
+# Player API
+
+# "players" resource RESTful API endpoint definitions
+players_api = Namespace('players')
+api.add_namespace(players_api)
+
+
+# Player database table definition
+class Player(db.Model):
+    player_name = db.Column(db.String, primary_key=True)
+    level = db.Column(db.Integer)
+    title = db.Column(db.String)
+    user_id = db.Column(db.Integer, db.ForeignKey(User.id, ondelete='cascade'), primary_key=True)
+    player_icon = db.Column(db.String)
+
+    user = db.relationship('User', foreign_keys='Player.user_id')
+
+    def args2query(query_args):
+        # Get the values from args and construct a query based on them
+        player_name = query_args['player_name']
+        level = query_args['level']
+        title = query_args['title']
+        user_id = query_args['user_id']
+        player_icon = query_args['player_icon']
+
+        query = Player.query
+
+        if player_name:
+            query = query.filter(Player.player_name == player_name)
+        
+        if level:
+            query = query.filter(Player.level == level)
+
+        if title:
+            query = query.filter(Player.title == title)
+        
+        if user_id:
+            query = query.filter(Player.user_id == user_id)
+
+        if player_icon:
+            query = query.filter(Player.player_icon == player_icon)
+
+        return query
+
+
+# Serialization/Deserialization schema definition
+class PlayerSchema(ma.ModelSchema):
+    strict = True
+    class Meta:
+        model = Player
+        # to fix the null foreign keys problem
+        include_fk = True
+
+
+
+# You can remove this if you don't care about the auto-generated docs
+api_player_model = api.model('Player',
+                    {
+                        'player_name' : fields.String(
+                                    description='The name of the player',
+                                    example='xXNoobMasterXx'),
+
+                        'level' : fields.Integer(
+                                    description='The level of the player',
+                                    example=1),
+
+                        'title' : fields.String(
+                                    description='The honor title of the player',
+                                    example='Legend'),
+
+                        'user_id' : fields.Integer(
+                                    description='The id of the user who owns the player',
+                                    example=1),
+
+                        'player_icon' : fields.String(
+                                    description='The path or name of the icon the player is using',
+                                    example='/contect/UI/icons/default.png')
+                    }
+                )
+
+
+
+@players_api.route('/')
+class PlayersList(Resource):
+
+    @players_api.response(200, 'A list of all players', [api_player_model])
+    @players_api.response(404, 'Found no users')
+    #@players_api.expect(server_request_parser, validate=True)
+    def get(self):
+        """
+        Query Players
+
+        <h3>Get a list of all players that match a certain query</h3>
+        """
+        #query_args = player_request_parser.parse_args()
+        # Only the model specific args are processed in the model
+        #query = Player.args2query(query_args)
+        
+        # Execute the query
+        #player = query.all()
+        players = Player.query.all()
+        data = PlayerSchema(many=True).dump(players).data
+        if players:
+            return data, 200
+        else:
+            return {'message' : 'No players found'}, 404
+
+    @players_api.response(201, 'Player registered successfully')
+    @players_api.response(200, 'Player already present, user info updated')
+    @players_api.response(400, 'Bad Request')
+    @players_api.expect(api_player_model, validate=True)
+    def post(self):
+        """
+        Register Player
+
+        <h3>register a player into the database</h3>
+        """
+        # validate and deserialize the data
+        new_player = PlayerSchema().load(players_api.payload)
+        new_player_row = Player.query.get((new_player.data.player_name, new_player.data.user_id))
+        # If the player already exists, update all their info
+        # A player is defined only by their user_id and player_name so the rest could change at any time
+        if new_player_row:
+            with dbsession():
+                Player.query.filter_by(player_name=new_player.data.player_name, user_id=new_player.data.user_id).\
+                    update(get_model_dict(new_player.data))
+            return {'message' : 'Player info updated'}, 200
+        # If this is the first time the player is registering with us,
+        # then create a new entry for them in the database
+        else:
+            with dbsession():
+                db.session.add(new_player.data)
+            return {'message' : 'Player Registered'}, 201
+
+
+@players_api.route('/<int:user_id>')
+class PlayerByID(Resource):
+
+    @players_api.response(200, 'The player info', api_player_model)
+    @players_api.response(404, 'Found no player with this user_id')
+    def get(self, user_id):
+        """
+        Request the info of a player
+
+        <h3>Get the info of the player matching the user_id</h3>
+        """
+        player = Player.query.filter_by(user_id=user_id).first()
+        if player:
+            return PlayerSchema().jsonify(player)
+        else:
+            return {'message' : 'No such player'}, 404
+
+    @players_api.response(200, 'The player was deleted successfully', api_player_model)
+    @players_api.response(404, 'Found no player with this user_id')
+    def delete(self, user_id):
+        """
+        request the deletion of a player
+
+        <h3>delete the the player matching the user_id</h3>
+        """
+        player = Player.query.filter_by(user_id=user_id).first()
+        if player:
+            data = PlayerSchema().dump(player).data
+            with dbsession():
+                db.session.delete(player)
+            return data, 200
+        else:
+            return {'message' : 'No such player'}, 404
 
 # Run server
 if __name__ == '__main__':
